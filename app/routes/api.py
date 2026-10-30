@@ -316,7 +316,9 @@ def dashboard():
         return api_error("Usuário não encontrado.", 404)
     if user["role"] == "talent":
         challenges = []
-        for challenge in mongo.db.challenges.find({"status": "published"}).sort("created_at", -1):
+        joined_ids = mongo.db.participations.distinct("challenge_id", {"talent_id": user["_id"]})
+        visible = {"$or": [{"status": "published"}, {"_id": {"$in": joined_ids}}]}
+        for challenge in mongo.db.challenges.find(visible).sort("created_at", -1):
             challenge["company_name"] = company_name(challenge["owner_id"])
             challenge["participation"] = mongo.db.participations.find_one(
                 {"challenge_id": challenge["_id"], "talent_id": user["_id"]}

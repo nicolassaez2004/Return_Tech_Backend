@@ -1,5 +1,7 @@
 # Return Tech
 
+> **Atualização: editor e correção automática.** Leia [INTEGRACAO_JUDGE0.md](INTEGRACAO_JUDGE0.md) para configurar o serviço, testar a demonstração e cadastrar os testes. As configurações adicionais ficam no mesmo `.env` existente do backend, preservando MongoDB e JWT. O frontend mantém apenas o endereço público da API no seu próprio `.env`.
+
 Plataforma que conecta empresas a estudantes e profissionais de cibersegurança por meio de desafios técnicos e processos seletivos baseados em evidências práticas.
 
 O objetivo do projeto não é oferecer uma plataforma educacional como o TryHackMe. O foco é permitir que empresas identifiquem talentos com base no desempenho técnico demonstrado em desafios autorizados.
@@ -41,6 +43,8 @@ Também é necessária uma conexão com a internet para acessar o MongoDB Atlas.
 ## 1. Arquivo `.env`
 
 O `.env` do backend contém informações privadas de acesso ao banco e não está no GitHub.
+
+Se ele já está configurado, continue usando esse mesmo arquivo. Esta revisão acrescenta somente `JUDGE0_URL`, `JUDGE0_API_KEY`, `JUDGE0_RAPIDAPI_HOST` e `JUDGE0_AUTH_TOKEN`, inicialmente vazios. Preencha os campos do seu provedor quando tiver o acesso real; não substitua MongoDB nem JWT pelos valores de um modelo. Remova o antigo `.env.example` caso ainda esteja na pasta.
 
 Solicite esse arquivo à pessoa responsável pelo projeto e coloque-o diretamente na pasta `Return_Tech_Backend`, no mesmo nível de `run.py`:
 
@@ -174,7 +178,7 @@ O frontend ficará disponível em:
 http://localhost:5173
 ```
 
-O frontend já utiliza `http://localhost:5000/api` como endereço padrão da API. Portanto, não é necessário criar um `.env` no frontend para executar o projeto localmente.
+O `.env` existente do frontend contém apenas `VITE_API_URL=http://localhost:5000/api`. O mesmo endereço é usado como padrão quando essa variável está ausente. Credenciais do MongoDB, JWT e Judge0 ficam somente no `.env` do backend.
 
 Não feche esse terminal enquanto estiver utilizando o sistema.
 

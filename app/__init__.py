@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify
@@ -8,8 +9,10 @@ from pymongo import ASCENDING
 from .extensions import jwt, mongo
 
 
-def create_app():
-    load_dotenv()
+def create_app(test_config=None):
+    # Use only this backend's existing .env, regardless of the terminal's folder.
+    # Environment variables supplied by the host keep their precedence.
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
     app = Flask(__name__)
     app.config["MONGO_URI"] = os.getenv(
         "MONGO_URI", "mongodb://localhost:27017/return_tech"
@@ -19,6 +22,11 @@ def create_app():
     )
     app.config["JWT_ACCESS_TOKEN_EXPIRES"] = False
     app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
+
+    for key in ("JUDGE0_URL", "JUDGE0_API_KEY", "JUDGE0_RAPIDAPI_HOST", "JUDGE0_AUTH_TOKEN"):
+        app.config[key] = os.getenv(key, "")
+    if test_config:
+        app.config.update(test_config)
 
     CORS(
         app,
@@ -46,6 +54,9 @@ def create_app():
         )
         mongo.db.challenges.create_index([("status", ASCENDING), ("created_at", -1)])
         mongo.db.notifications.create_index([("user_id", ASCENDING), ("created_at", -1)])
+
+    from .coding_setup import setup_coding
+    setup_coding(app)
 
     return app
 
