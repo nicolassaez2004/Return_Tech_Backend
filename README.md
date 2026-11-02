@@ -180,12 +180,13 @@ São necessários dois terminais:
 # Como testar o fluxo completo
 
 1. Crie uma conta do tipo Empresa.
-2. Publique um desafio de cibersegurança.
-3. Abra uma janela anônima do navegador.
-4. Crie uma conta de Estudante/Profissional.
-5. Entre no desafio e envie uma solução.
-6. Volte para a conta da empresa.
-7. Avalie a entrega e adicione o participante à shortlist.
+2. Cadastre um desafio de cibersegurança e envie para aprovação.
+3. Entre como administrador e aprove a publicação do desafio.
+4. Abra uma janela anônima do navegador.
+5. Crie uma conta de Estudante/Profissional.
+6. Entre no desafio aprovado e envie uma solução.
+7. Volte para a conta da empresa.
+8. Avalie a entrega e adicione o participante à shortlist.
 
 A janela anônima é necessária para manter duas contas conectadas simultaneamente.
 
@@ -318,7 +319,7 @@ A definir...
 
 ## Administração dos CTFs
 
-Há três perfis separados: `company` cadastra e publica seus próprios desafios;
+Há três perfis separados: `company` cadastra e envia seus próprios desafios para aprovação;
 `talent` consulta os publicados, participa e envia soluções; `admin` é reservado
 à equipe Return Tech e administra os desafios de todas as empresas.
 
@@ -337,7 +338,7 @@ frontend e backend na hospedagem escolhida e utilize o endereço do frontend
 seguido de `/#/admin`.
 
 No painel, a equipe pode buscar e filtrar CTFs, abrir o enunciado, editar os
-campos, publicar, encerrar, reabrir ou retirar da publicação para rascunho.
+campos, aprovar publicações, solicitar ajustes, encerrar ou retirar da publicação para rascunho.
 O desafio continua associado à empresa que o criou. Os exemplos fictícios
 continuam definidos no frontend e não são registros do banco de dados.
 
@@ -350,7 +351,7 @@ continuam definidos no frontend e não são registros do banco de dados.
   responsável ou por um administrador.
 - `GET /api/admin/challenges`: listar todos os desafios, apenas para `admin`.
 - `PATCH /api/challenges/<id>/status`: também aceita administradores; a ação
-  `draft` é exclusiva deles.
+  `draft`, a aprovação e a solicitação de ajustes são exclusivas deles.
 
 ### Testes sem usar o banco real
 
@@ -360,3 +361,25 @@ python -m unittest discover -s tests -v
 ```
 
 Os testes usam um banco em memória para verificar os fluxos e as permissões.
+
+
+## Fluxo de aprovação dos desafios
+
+- `draft` → `pending_review`: a empresa responsável usa `submit_review`.
+- `pending_review` → `published`: somente `admin`, com ação `approve` e
+  `review_revision` igual à revisão do enunciado que foi exibida ao revisor.
+- `pending_review` → `changes_requested`: somente `admin`, com ação
+  `request_changes`, `review_revision` e justificativa `feedback` obrigatória.
+- A empresa pode editar os campos e reenviar os ajustes ou um desafio encerrado.
+  Alterações reais da empresa invalidam a aprovação e devolvem o desafio a `draft`.
+- A ação antiga `publish` de empresa apenas solicita a revisão; ela nunca publica.
+  Para administrador, `publish` é um alias de `approve`, com as mesmas validações.
+- Apenas `published` aparece para novos talentos. Pendentes não permitem consulta
+  direta, inscrição ou envio de soluções. Participações encerradas continuam consultáveis.
+- A aprovação registra administrador, data e revisão. Uma revisão antiga ou uma
+  alteração concorrente recebe HTTP 409, exigindo atualizar e revisar o enunciado.
+- A empresa recebe uma notificação quando o desafio é aprovado ou precisa de ajustes.
+
+O código não modifica retroativamente os registros que já estavam publicados.
+Os testes em memória cobrem os estados, as permissões, a nova aprovação após
+alterações e a proteção contra publicação de conteúdo ainda não revisado.

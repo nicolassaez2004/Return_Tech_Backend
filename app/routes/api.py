@@ -143,8 +143,26 @@ def challenge_detail(challenge_id):
         fields, error = challenge_fields(request.get_json(silent=True))
         if error:
             return error
+        changed = any(challenge.get(field) != value for field, value in fields.items())
+        if not changed:
+            return jsonify({"challenge": serialize(challenge_details(challenge, user))})
         fields["updated_at"] = now()
-        mongo.db.challenges.update_one({"_id": oid}, {"$set": fields})
+        fields["revision"] = challenge.get("revision", 0) + 1
+        if user["role"] == "company":
+            fields.update({
+                "status": "draft", "authorization_confirmed": False,
+                "approved_by": None, "approved_at": None, "approved_revision": None,
+                "submitted_at": None,
+            })
+        elif challenge["status"] == "published":
+            fields.update({"approved_by": user["_id"], "approved_at": now(),
+                           "approved_revision": fields["revision"]})
+        result = mongo.db.challenges.update_one(
+            {"_id": oid, "status": challenge["status"], "updated_at": challenge.get("updated_at")},
+            {"$set": fields},
+        )
+        if result.matched_count != 1:
+            return api_error("O desafio foi alterado. Atualize a página antes de salvar.", 409)
         challenge.update(fields)
     return jsonify({"challenge": serialize(challenge_details(challenge, user))})
 
@@ -189,6 +207,8 @@ def challenges():
         **fields,
         "owner_id": user["_id"],
         "status": "draft",
+        "revision": 1,
+        "review_feedback": "",
         "is_recruitment": True,
         "authorization_confirmed": False,
         "created_at": now(),
@@ -219,17 +239,65 @@ def challenge_status(challenge_id):
     if not isinstance(data, dict):
         return api_error("Informe a ação desejada.")
     action = data.get("action")
-    if action == "publish":
-        update = {"status": "published", "authorization_confirmed": True}
+    if not isinstance(action, str):
+        return api_error("Informe uma ação válida.")
+    current_status = challenge["status"]
+    revision = challenge.get("revision", 0)
+    is_admin = user["role"] == "admin"
+    if action in {"approve", "request_changes"} or (action == "publish" and is_admin):
+        if not is_admin:
+            return api_error("Apenas administradores podem aprovar ou solicitar ajustes.", 403)
+        if current_status != "pending_review":
+            return api_error("Este desafio não está aguardando aprovação.", 409)
+        if type(data.get("review_revision")) is not int or data["review_revision"] != revision:
+            return api_error("O enunciado foi alterado. Atualize a página e revise a versão atual.", 409)
+        if action == "request_changes":
+            feedback = data.get("feedback", "")
+            if not isinstance(feedback, str) or not feedback.strip() or len(feedback.strip()) > 2000:
+                return api_error("Descreva os ajustes necessários em até 2000 caracteres.")
+            update = {"status": "changes_requested", "authorization_confirmed": False,
+                      "review_feedback": feedback.strip(), "reviewed_by": user["_id"],
+                      "reviewed_at": now(), "approved_by": None, "approved_at": None,
+                      "approved_revision": None}
+        else:
+            update = {"status": "published", "authorization_confirmed": True,
+                      "approved_by": user["_id"], "approved_at": now(), "approved_revision": revision,
+                      "reviewed_by": user["_id"], "reviewed_at": now(), "review_feedback": ""}
+    elif action == "submit_review" or (action == "publish" and not is_admin):
+        if is_admin:
+            return api_error("O envio para aprovação deve ser feito pela empresa responsável.", 403)
+        if current_status not in {"draft", "changes_requested", "closed"}:
+            return api_error("Este desafio já está publicado ou aguardando aprovação.", 409)
+        update = {"status": "pending_review", "authorization_confirmed": False,
+                  "submitted_at": now(), "review_feedback": "", "reviewed_by": None,
+                  "reviewed_at": None, "approved_by": None, "approved_at": None,
+                  "approved_revision": None}
     elif action == "close":
+        if current_status != "published":
+            return api_error("Apenas desafios publicados podem ser encerrados.", 409)
         update = {"status": "closed"}
-    elif action == "draft" and user["role"] == "admin":
-        update = {"status": "draft", "authorization_confirmed": False}
+    elif action == "draft" and is_admin:
+        update = {"status": "draft", "authorization_confirmed": False,
+                  "approved_by": None, "approved_at": None, "approved_revision": None,
+                  "submitted_at": None, "review_feedback": ""}
     else:
         return api_error("Ação inválida.")
     update["updated_at"] = now()
-    mongo.db.challenges.update_one({"_id": oid}, {"$set": update})
-    return jsonify({"ok": True})
+    result = mongo.db.challenges.update_one(
+        {"_id": oid, "status": current_status, "updated_at": challenge.get("updated_at")},
+        {"$set": update},
+    )
+    if result.matched_count != 1:
+        return api_error("O desafio foi alterado. Atualize a página e tente novamente.", 409)
+    if is_admin and action in {"approve", "publish", "request_changes"}:
+        add_notification(
+            challenge["owner_id"],
+            "Desafio aprovado" if update["status"] == "published" else "Ajustes solicitados no desafio",
+            f'O desafio “{challenge["title"]}” foi aprovado e publicado.' if update["status"] == "published"
+            else f'Foram solicitados ajustes em “{challenge["title"]}”: {update["review_feedback"]}',
+            "challenge_review",
+        )
+    return jsonify({"ok": True, "status": update["status"]})
 
 
 @api_bp.post("/challenges/<challenge_id>/join")
@@ -411,6 +479,8 @@ def dashboard():
         submissions = []
         for participation in participations:
             challenge = mongo.db.challenges.find_one({"_id": participation["challenge_id"]})
+            if challenge and challenge["status"] not in {"published", "closed"}:
+                challenge = {"_id": challenge["_id"], "title": "Desafio em revisão", "skills": []}
             for submission in mongo.db.submissions.find(
                 {"participation_id": participation["_id"]}
             ).sort("created_at", -1):
