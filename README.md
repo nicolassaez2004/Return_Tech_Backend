@@ -315,3 +315,48 @@ Devemos fazer um front-end minimalista e profissional, com temática simples de 
 ## BACK-END
 
 A definir...
+
+## Administração dos CTFs
+
+Há três perfis separados: `company` cadastra e publica seus próprios desafios;
+`talent` consulta os publicados, participa e envia soluções; `admin` é reservado
+à equipe Return Tech e administra os desafios de todas as empresas.
+
+O cadastro público aceita somente empresas e talentos. Para cada integrante do
+grupo, crie uma conta administrativa exclusiva no terminal do backend, com o
+ambiente virtual ativado e a conexão ao MongoDB configurada:
+
+```powershell
+python -m flask --app run.py create-admin
+```
+
+O comando solicita nome, e-mail e senha, confirma a senha sem exibi-la e salva
+apenas o hash. Ele não promove contas existentes. Depois, entre com essa conta
+em `http://localhost:5173/#/admin`. Para uso fora do computador local, publique
+frontend e backend na hospedagem escolhida e utilize o endereço do frontend
+seguido de `/#/admin`.
+
+No painel, a equipe pode buscar e filtrar CTFs, abrir o enunciado, editar os
+campos, publicar, encerrar, reabrir ou retirar da publicação para rascunho.
+O desafio continua associado à empresa que o criou. Os exemplos fictícios
+continuam definidos no frontend e não são registros do banco de dados.
+
+### Rotas acrescentadas
+
+- `GET /api/challenges/<id>`: detalhes do desafio; rascunhos ficam restritos à
+  empresa responsável e à administração. Participantes podem consultar um
+  desafio encerrado, mas não enviar novas soluções.
+- `PATCH /api/challenges/<id>`: editar enunciado e metadados, pela empresa
+  responsável ou por um administrador.
+- `GET /api/admin/challenges`: listar todos os desafios, apenas para `admin`.
+- `PATCH /api/challenges/<id>/status`: também aceita administradores; a ação
+  `draft` é exclusiva deles.
+
+### Testes sem usar o banco real
+
+```powershell
+python -m pip install -r requirements-dev.txt
+python -m unittest discover -s tests -v
+```
+
+Os testes usam um banco em memória para verificar os fluxos e as permissões.

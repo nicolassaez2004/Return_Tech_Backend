@@ -34,6 +34,9 @@ def create_app():
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(api_bp, url_prefix="/api")
 
+    from .admin import create_admin
+    app.cli.add_command(create_admin)
+
     @app.get("/api/health")
     def health():
         mongo.db.command("ping")
