@@ -26,7 +26,8 @@ def serialize(value):
     if isinstance(value, list):
         return [serialize(item) for item in value]
     if isinstance(value, dict):
-        return {key: serialize(item) for key, item in value.items()}
+        # Delivery events are internal records, never part of an API response.
+        return {key: serialize(item) for key, item in value.items() if key != "mail_events"}
     return value
 
 
