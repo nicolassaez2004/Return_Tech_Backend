@@ -8,6 +8,8 @@ from pymongo import DESCENDING
 from werkzeug.utils import secure_filename
 
 from ..extensions import mongo
+from ..challenge_lifecycle import close_if_expired, deadline_end, deadline_passed
+from ..mail_notifications import mail_event
 from ..utils import api_error, current_user, now, object_id, serialize
 
 api_bp = Blueprint("api", __name__)
@@ -89,7 +91,8 @@ def challenge_fields(data):
         fields[field] = value.strip()
     try:
         date.fromisoformat(fields["deadline"])
-    except ValueError:
+        deadline_end(fields["deadline"])
+    except (ValueError, OverflowError):
         return None, api_error("Informe um prazo válido.")
     skills = data.get("skills", [])
     if isinstance(skills, str):
@@ -148,6 +151,7 @@ def challenge_detail(challenge_id):
             return jsonify({"challenge": serialize(challenge_details(challenge, user))})
         fields["updated_at"] = now()
         fields["revision"] = challenge.get("revision", 0) + 1
+        fields["ends_at"] = deadline_end(fields["deadline"])
         if user["role"] == "company":
             fields.update({
                 "status": "draft", "authorization_confirmed": False,
@@ -209,6 +213,7 @@ def challenges():
         "status": "draft",
         "revision": 1,
         "review_feedback": "",
+        "ends_at": deadline_end(fields["deadline"]),
         "is_recruitment": True,
         "authorization_confirmed": False,
         "created_at": now(),
@@ -260,6 +265,8 @@ def challenge_status(challenge_id):
                       "reviewed_at": now(), "approved_by": None, "approved_at": None,
                       "approved_revision": None}
         else:
+            if deadline_passed(challenge):
+                return api_error("O prazo do desafio já terminou. Atualize o prazo antes de aprovar a publicação.", 409)
             update = {"status": "published", "authorization_confirmed": True,
                       "approved_by": user["_id"], "approved_at": now(), "approved_revision": revision,
                       "reviewed_by": user["_id"], "reviewed_at": now(), "review_feedback": ""}
@@ -275,7 +282,7 @@ def challenge_status(challenge_id):
     elif action == "close":
         if current_status != "published":
             return api_error("Apenas desafios publicados podem ser encerrados.", 409)
-        update = {"status": "closed"}
+        update = {"status": "closed", "closed_at": now(), "closed_reason": "manual"}
     elif action == "draft" and is_admin:
         update = {"status": "draft", "authorization_confirmed": False,
                   "approved_by": None, "approved_at": None, "approved_revision": None,
@@ -283,9 +290,13 @@ def challenge_status(challenge_id):
     else:
         return api_error("Ação inválida.")
     update["updated_at"] = now()
+    mutation = {"$set": update}
+    event_kind = {"pending_review": "review_requested", "published": "challenge_published", "closed": "challenge_closed"}.get(update["status"])
+    if event_kind:
+        mutation["$push"] = {"mail_events": mail_event(event_kind, challenge)}
     result = mongo.db.challenges.update_one(
         {"_id": oid, "status": current_status, "updated_at": challenge.get("updated_at")},
-        {"$set": update},
+        mutation,
     )
     if result.matched_count != 1:
         return api_error("O desafio foi alterado. Atualize a página e tente novamente.", 409)
@@ -310,19 +321,17 @@ def join_challenge(challenge_id):
     challenge = mongo.db.challenges.find_one({"_id": oid, "status": "published"})
     if not challenge:
         return api_error("Desafio indisponível.", 404)
-    existing = mongo.db.participations.find_one(
-        {"challenge_id": oid, "talent_id": user["_id"]}
+    if deadline_passed(challenge):
+        close_if_expired(challenge)
+        return api_error("O prazo de inscrição neste desafio já terminou.", 409)
+    result = mongo.db.participations.update_one(
+        {"challenge_id": oid, "talent_id": user["_id"]}, {"$setOnInsert": {
+            "challenge_id": oid, "talent_id": user["_id"], "status": "joined",
+            "created_at": now(), "updated_at": now(),
+            "mail_events": [mail_event("challenge_joined", challenge, user["_id"])],
+        }}, upsert=True,
     )
-    if not existing:
-        mongo.db.participations.insert_one(
-            {
-                "challenge_id": oid,
-                "talent_id": user["_id"],
-                "status": "joined",
-                "created_at": now(),
-                "updated_at": now(),
-            }
-        )
+    if result.upserted_id is not None:
         add_notification(
             challenge["owner_id"],
             "Novo talento no desafio",
@@ -347,6 +356,9 @@ def submit_work(challenge_id):
     challenge = mongo.db.challenges.find_one({"_id": oid, "status": "published"})
     if not challenge:
         return api_error("Este desafio não está mais recebendo entregas.", 409)
+    if deadline_passed(challenge):
+        close_if_expired(challenge)
+        return api_error("O prazo de envio deste desafio já terminou.", 409)
     summary = str(request.form.get("summary", "")).strip()
     if not summary:
         return api_error("Informe o resumo da solução.")

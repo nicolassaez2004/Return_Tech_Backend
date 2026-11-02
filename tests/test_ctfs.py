@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import mongomock
@@ -34,7 +35,8 @@ class CTFTests(unittest.TestCase):
             with self.app.app_context():
                 token = create_access_token(identity=str(oid))
             self.headers[key] = {"Authorization": f"Bearer {token}"}
-        self.fields = {"title": "Investigação de logs", "description": "Contexto\nInstruções do desafio", "deliverables": "Relatório e evidências", "deadline": "2026-12-10", "skills": ["SOC"], "level": "Júnior", "work_mode": "Remoto"}
+        deadline = (datetime.now(timezone.utc) + timedelta(days=45)).date().isoformat()
+        self.fields = {"title": "Investigação de logs", "description": "Contexto\nInstruções do desafio", "deliverables": "Relatório e evidências", "deadline": deadline, "skills": ["SOC"], "level": "Júnior", "work_mode": "Remoto"}
 
     def create(self):
         response = self.client.post("/api/challenges", json=self.fields, headers=self.headers["company"])

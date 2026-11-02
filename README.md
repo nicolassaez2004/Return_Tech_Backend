@@ -321,3 +321,96 @@ docker compose up -d
 ```
 
 Os dados locais não são compartilhados com os outros integrantes. Ao voltar ao banco compartilhado, restaure a `MONGO_URI` do Atlas. Não é necessário executar o Docker nesse fluxo.
+
+
+## E-mails automáticos
+
+| Destinatário | Quando recebe |
+| --- | --- |
+| Talento | Confirmação da inscrição no desafio. |
+| Talentos inscritos | Encerramento do desafio, pelo prazo ou pelo botão **Encerrar**. |
+| Empresa responsável | Aprovação e publicação do desafio pela administração. |
+| Empresa responsável | Encerramento do desafio. |
+| Todos os administradores | A empresa envia ou reenvia um desafio para aprovação. |
+
+Os exemplos fictícios do frontend continuam locais e não disparam e-mails. Salvar
+um rascunho não envia aviso à administração; o aviso ocorre em **Enviar para aprovação**.
+
+### Configurar o Gmail
+
+O arquivo `.env.example` documenta os campos. Preserve a configuração existente do
+MongoDB e da autenticação ao acrescentar os campos de e-mail ao `.env` local:
+
+```env
+MAIL_ENABLED=false
+MAIL_SERVER=smtp.gmail.com
+MAIL_PORT=587
+MAIL_USE_TLS=true
+MAIL_USE_SSL=false
+MAIL_USERNAME=seu-email@gmail.com
+MAIL_PASSWORD=
+MAIL_FROM=seu-email@gmail.com
+MAIL_FROM_NAME=Return Tech
+CHALLENGE_TIMEZONE=America/Sao_Paulo
+BACKGROUND_JOBS_ENABLED=true
+JOBS_INTERVAL_SECONDS=30
+```
+
+1. Na conta remetente, ative a verificação em duas etapas e gere uma senha de app.
+   Consulte a [orientação oficial do Google](https://support.google.com/accounts/answer/185833?hl=pt-BR).
+2. Preencha `MAIL_USERNAME`, `MAIL_FROM` e `MAIL_PASSWORD` apenas no `.env`.
+   Use a senha de app em `MAIL_PASSWORD`, em vez da senha comum da conta.
+3. Mude `MAIL_ENABLED=true` e reinicie o backend. Com envio desativado ou
+   configuração incompleta, os avisos ficam na fila para envio depois da ativação.
+4. Confira o estado, sem exibir senhas nem destinatários:
+
+   ```powershell
+   python -m flask --app run.py mail-status
+   ```
+
+Os links dos e-mails usam `FRONTEND_URL`. Na execução local, eles apontam para
+`http://localhost:5173`; quando o site for hospedado, configure seu endereço público.
+
+### Encerramento e processamento em segundo plano
+
+O prazo vale até o fim do dia em `CHALLENGE_TIMEZONE`, inicialmente
+`America/Sao_Paulo`. Ao chegar à meia-noite seguinte, o desafio é encerrado.
+O processamento verifica os prazos e a fila a cada 30 segundos. Inscrições e envios
+depois do prazo também são recusados pela API, mesmo entre duas verificações.
+
+Na execução normal com `python run.py`, o processamento começa automaticamente.
+Mantenha o backend em execução. Em uma hospedagem com outro servidor WSGI,
+execute um processo separado, supervisionado pela hospedagem:
+
+```powershell
+python -m flask --app run.py worker
+```
+
+Para esse modo, `BACKGROUND_JOBS_ENABLED=false` desativa a thread de `run.py`;
+o comando `worker` continua funcionando. Para processar somente uma rodada:
+
+```powershell
+python -m flask --app run.py worker --once
+```
+
+### Fila, falhas e privacidade
+
+Os eventos ficam gravados junto da ação no MongoDB e são convertidos em mensagens
+na coleção `email_outbox`. Cada destinatário recebe uma mensagem separada. Uma
+inscrição repetida, o mesmo evento reprocessado ou duas verificações do prazo não
+geram novos avisos para o mesmo destinatário.
+
+Falhas de SMTP não desfazem a inscrição ou a publicação. O envio tem até cinco
+tentativas, com intervalo crescente. Depois de corrigir uma configuração, é
+possível recolocar os avisos que esgotaram as tentativas na fila:
+
+```powershell
+python -m flask --app run.py retry-failed-emails
+```
+
+Há recuperação de trabalho interrompido e um identificador estável de mensagem.
+Como em outros envios por SMTP, uma queda depois de o servidor aceitar a mensagem
+e antes da confirmação no banco ainda pode causar uma repetição na recuperação.
+
+O `.env` é ignorado pelo Git. Os testes usam banco em memória e SMTP simulado;
+eles não enviam mensagens reais nem usam as credenciais do remetente.

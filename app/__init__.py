@@ -6,6 +6,7 @@ from flask_cors import CORS
 from pymongo import ASCENDING
 
 from .extensions import jwt, mongo
+from .mail_notifications import configure_mail, env_bool
 
 
 def create_app():
@@ -19,6 +20,10 @@ def create_app():
     )
     app.config["JWT_ACCESS_TOKEN_EXPIRES"] = False
     app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
+    app.config["CHALLENGE_TIMEZONE"] = os.getenv("CHALLENGE_TIMEZONE", "America/Sao_Paulo")
+    app.config["BACKGROUND_JOBS_ENABLED"] = env_bool("BACKGROUND_JOBS_ENABLED", True)
+    app.config["JOBS_INTERVAL_SECONDS"] = max(1, int(os.getenv("JOBS_INTERVAL_SECONDS", "30")))
+    configure_mail(app)
 
     CORS(
         app,
@@ -36,6 +41,10 @@ def create_app():
 
     from .admin import create_admin
     app.cli.add_command(create_admin)
+    from .jobs import mail_status, retry_failed_emails, worker_command
+    app.cli.add_command(worker_command)
+    app.cli.add_command(mail_status)
+    app.cli.add_command(retry_failed_emails)
 
     @app.get("/api/health")
     def health():
@@ -49,6 +58,9 @@ def create_app():
         )
         mongo.db.challenges.create_index([("status", ASCENDING), ("created_at", -1)])
         mongo.db.notifications.create_index([("user_id", ASCENDING), ("created_at", -1)])
+        mongo.db.challenges.create_index([("status", ASCENDING), ("ends_at", ASCENDING)])
+        mongo.db.email_outbox.create_index([("status", ASCENDING), ("next_attempt_at", ASCENDING)])
+        mongo.db.email_outbox.create_index([("status", ASCENDING), ("lease_until", ASCENDING)])
 
     return app
 
