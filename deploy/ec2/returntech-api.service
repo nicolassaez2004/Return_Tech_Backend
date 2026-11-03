@@ -1,0 +1,25 @@
+# Managed by Return Tech deployment.
+[Unit]
+Description=Return Tech API
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=returntech
+Group=returntech
+WorkingDirectory=/opt/returntech/backend
+EnvironmentFile=/etc/returntech/backend.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/returntech/backend/.venv/bin/gunicorn --workers 1 --threads 2 --bind 127.0.0.1:8000 --timeout 60 --access-logfile - --error-logfile - run:app
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

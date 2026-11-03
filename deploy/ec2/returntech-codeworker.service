@@ -1,0 +1,25 @@
+# Managed by Return Tech deployment.
+[Unit]
+Description=Return Tech code correction worker
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=returntech
+Group=returntech
+WorkingDirectory=/opt/returntech/backend
+EnvironmentFile=/etc/returntech/backend.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/returntech/backend/.venv/bin/python -m flask --app run.py process-code-jobs --watch
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

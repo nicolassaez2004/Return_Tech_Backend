@@ -15,7 +15,7 @@ JUDGE0_AUTH_TOKEN=
 
 Use em `JUDGE0_AUTH_TOKEN` o token configurado na instância do Judge0. Em um provedor RapidAPI, utilize a URL, a chave e o host fornecidos pelo serviço. Credenciais ficam somente no backend. Use HTTPS para executores remotos; HTTP é aceito apenas em localhost. Reinicie o backend após alterar a configuração. Variáveis definidas no processo têm prioridade sobre o arquivo `.env`.
 
-No frontend, mantenha `VITE_API_URL` apontando para a API Flask, normalmente `http://localhost:5000/api`.
+No desenvolvimento local, o frontend usa `http://localhost:5000/api`. No site publicado, o build usa `/api` no mesmo endereço HTTPS do frontend.
 
 ## Iniciar o Judge0 local
 
@@ -40,12 +40,12 @@ Sem `--watch`, o comando processa uma rodada e encerra. A fila conclui correçõ
 
 ## Fluxo de aprovação
 
-1. A empresa cria um desafio e salva como rascunho.
-2. Em **Configurar código**, cadastra as linguagens, o exemplo público e os casos privados.
-3. Salvar a configuração atualiza a revisão do desafio. A empresa envia o desafio para aprovação.
+1. Em **Criar desafio**, a empresa escolhe **Código com correção automática (Judge0)**.
+2. Preenche as linguagens, a pontuação, o exemplo público e os casos privados nos campos do formulário e salva como rascunho.
+3. A empresa abre o desafio salvo e envia para aprovação. Em um rascunho existente sem tentativas, também pode editar a avaliação por **Configurar código**.
 4. A administração revisa o enunciado e a configuração e aprova a revisão atual. Somente o administrador publica.
 5. O talento se inscreve no desafio publicado e envia o código pelo editor.
-6. A empresa acompanha as tentativas e a melhor pontuação em **Código e pontos**.
+6. A empresa consulta as resoluções, autores e notas em **Avaliações** e pode adicionar participantes à **Shortlist**. O participante consulta suas respostas no **Portfólio**.
 
 A configuração só pode mudar em um rascunho sem tentativas. A administração pode consultar os casos privados para revisão; a edição pertence à empresa responsável. Desafios pendentes de revisão não ficam disponíveis aos talentos. Após o encerramento, participantes mantêm o histórico, sem novos envios.
 

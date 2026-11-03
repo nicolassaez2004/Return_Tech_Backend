@@ -2,11 +2,50 @@
 
 Plataforma que conecta empresas a estudantes e profissionais de cibersegurança por meio de desafios técnicos e processos seletivos baseados em evidências práticas. O foco é permitir que as empresas identifiquem talentos pelo desempenho demonstrado em desafios realizados em ambientes autorizados.
 
+## Acesso do professor — ambiente pronto
+
+**Abra o projeto no navegador: [Return Tech](https://min-parties-blair-confirmed.trycloudflare.com/).**
+
+O professor utiliza a aplicação já hospedada. Não precisa clonar os repositórios,
+instalar dependências, iniciar um servidor, configurar a AWS ou receber arquivos
+`.env` e chaves `.pem`.
+
+1. Na página inicial, escolha **Estudante / Profissional** ou **Empresa**.
+2. Entre com uma conta existente ou use **Criar conta** no próprio site. Para
+   verificar emails, cadastre um endereço de email real ao qual tenha acesso.
+3. A [Administração](https://min-parties-blair-confirmed.trycloudflare.com/#/admin) utiliza uma conta administrativa já cadastrada.
+   Solicite suas credenciais ao autor por um canal privado. Senhas administrativas
+   não são publicadas neste README.
+
+Como estudante/profissional, é possível participar de desafios publicados, enviar
+respostas e consultar o **Portfólio**. Como empresa, é possível criar desafios de
+relatório ou código, acompanhar **Avaliações** e selecionar perfis na **Shortlist**.
+Novos desafios ficam disponíveis aos participantes depois da aprovação administrativa.
+
+**Disponibilidade:** o site e a API estão na EC2; o MongoDB está no Atlas. O
+Judge0 roda no computador do autor, ligado à EC2 por um túnel SSH. Para avaliar
+a correção automática de código, combine um horário com o autor e confirme que
+o computador, a VM Judge0 e o túnel estão ligados. O professor não precisa executar
+o Judge0 no próprio computador.
+
+**Link temporário:** o endereço HTTPS utiliza um Cloudflare Quick Tunnel e pode
+mudar se esse túnel reiniciar. Se o link não abrir, solicite o endereço atualizado
+ao autor. A equipe deve atualizar este link nos READMEs quando houver mudança.
+
+`localhost` aponta para o computador de quem abre o navegador. Ele é usado apenas
+na apresentação local; para acesso remoto, use o link HTTPS acima.
+
+As seções de instalação, execução local e deploy abaixo são destinadas à equipe
+de desenvolvimento e manutenção.
+
 ## Estado atual
 
-O Return Tech é um MVP funcional para desenvolvimento e testes. O frontend e o backend são executados localmente, enquanto o banco de dados é compartilhado pelo MongoDB Atlas.
+O Return Tech está publicado em uma EC2 Ubuntu, com Nginx, Gunicorn e serviços
+separados para emails e correções. O acesso HTTPS é fornecido pelo túnel temporário
+da Cloudflare, e o Judge0 permanece no computador do autor pelo túnel SSH autorizado.
+O ambiente local continua disponível para desenvolvimento e apresentação.
 
-Para disponibilizar o sistema publicamente, ainda será necessário hospedar o frontend e o backend, configurar HTTPS, restringir acessos e revisar as configurações de segurança para produção.
+O roteiro de manutenção da hospedagem está em [deploy/ec2/README.md](deploy/ec2/README.md).
 
 ## Tecnologias
 
@@ -221,7 +260,7 @@ python -m flask --app run.py create-admin
 
 O comando solicita nome, e-mail, senha e confirmação da senha. A senha não é exibida durante a digitação, e apenas seu hash é armazenado. O comando cria uma nova conta; não promove contas existentes.
 
-Depois, entre com essa conta em <http://localhost:5173/#/admin>. Quando o sistema estiver hospedado, utilize o endereço do frontend seguido de `/#/admin`.
+No desenvolvimento local, entre com essa conta em <http://localhost:5173/#/admin>. Na aplicação já hospedada, utilize o link **Administração** da seção de acesso do professor.
 
 ### Painel administrativo
 
@@ -385,8 +424,10 @@ JOBS_INTERVAL_SECONDS=30
    python -m flask --app run.py mail-status
    ```
 
-Os links dos e-mails usam `FRONTEND_URL`. Na execução local, eles apontam para
-`http://localhost:5173`; quando o site for hospedado, configure seu endereço público.
+Os links dos emails usam `FRONTEND_URL` do processo que envia as mensagens. No
+ambiente hospedado, essa variável utiliza a origem HTTPS pública atual. Como o
+banco é compartilhado e a fila de emails está na EC2, ações feitas pelo frontend
+local também podem gerar emails com links para a aplicação publicada.
 
 ### Encerramento e processamento em segundo plano
 
@@ -455,6 +496,6 @@ python -m flask --app run.py process-code-jobs --watch
 
 Sem `--watch`, o comando processa uma rodada. Essa fila é independente da fila de prazos e e-mails (`worker`).
 
-A empresa configura a avaliação em um rascunho sem tentativas e envia o desafio para aprovação. A administração revisa os casos e o enunciado e aprova a revisão atual. Depois da publicação, talentos inscritos podem enviar código dentro do prazo; a empresa acompanha a melhor pontuação de cada participante.
+Em **Criar desafio**, a empresa pode escolher **Código com correção automática (Judge0)** e preencher linguagens, pontuação, exemplo público e casos privados. O desafio é salvo como rascunho e enviado para aprovação. A administração revisa os casos e o enunciado e aprova a revisão atual. Depois da publicação, talentos inscritos podem enviar código dentro do prazo; as resoluções e seus autores aparecem em **Avaliações**, e as respostas ficam no **Portfólio** do participante.
 
 Consulte [INTEGRACAO_JUDGE0.md](INTEGRACAO_JUDGE0.md) para iniciar a VM local já preparada, consultar as rotas, configurar os casos e executar os testes com serviços simulados.

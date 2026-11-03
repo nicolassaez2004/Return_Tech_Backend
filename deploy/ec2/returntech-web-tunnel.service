@@ -1,0 +1,21 @@
+[Unit]
+Description=Return Tech temporary HTTPS tunnel
+Wants=network-online.target
+After=network-online.target nginx.service
+
+[Service]
+Type=simple
+User=returntech
+Group=returntech
+Environment=GOMAXPROCS=2
+ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:80 --http-host-header returntech.13.222.2.66.nip.io
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
