@@ -1,6 +1,23 @@
+# Configuração local e credenciais
+.env
+.env.*
+!.env.example
+
+# Ambiente Python e caches
 .venv/
 __pycache__/
-*.pyc
-.env
+*.py[cod]
 .pytest_cache/
+
+# Relatórios de testes e logs
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.log
+
+# Arquivos locais do sistema
+.DS_Store
+Thumbs.db
+Desktop.ini
 

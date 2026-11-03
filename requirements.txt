@@ -5,4 +5,5 @@ Flask-PyMongo==3.0.1
 pymongo==4.15.3
 python-dotenv==1.1.1
 tzdata==2026.5
+requests==2.34.2
 

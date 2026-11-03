@@ -16,6 +16,23 @@ Para disponibilizar o sistema publicamente, ainda será necessário hospedar o f
 - **Autenticação:** JWT.
 - **Armazenamento de arquivos:** GridFS do MongoDB.
 
+## Convenções da API
+
+A API segue o nível 2 do [modelo de maturidade de Richardson](https://martinfowler.com/articles/richardsonMaturityModel.html): recursos identificados por URL, métodos HTTP e códigos de resposta conforme a operação.
+
+| Operação | Método e recurso | Resposta |
+| --- | --- | --- |
+| Consultar desafios | `GET /api/challenges` | `200` |
+| Criar um rascunho | `POST /api/challenges` | `201` e `Location` do desafio |
+| Editar enunciado ou estado | `PATCH /api/challenges/{id}` ou `PATCH /api/challenges/{id}/status` | `200` |
+| Atualizar parte do perfil | `PATCH /api/profile` | `200` |
+| Substituir a configuração de código | `PUT /api/challenges/{id}/coding/config` | `200` |
+| Enviar código para correção | `POST /api/challenges/{id}/code-jobs` | `202` e `Location` para acompanhar o envio |
+
+Entradas inválidas usam `400`, autenticação ausente ou inválida usa `401`, acesso negado usa `403`, recursos indisponíveis usam `404` e conflitos de estado usam `409`. As consultas de código podem sincronizar resultados de um envio existente; elas não criam novas execuções.
+
+O `.gitignore` e o `.env.example` devem ser versionados. O `.env` real e suas variantes privadas devem permanecer fora do Git. Gere uma chave JWT aleatória para o ambiente; os marcadores deste guia não são credenciais de uso.
+
 ## Estrutura do projeto
 
 A aplicação está organizada em duas pastas, que podem estar em repositórios separados:
@@ -56,7 +73,7 @@ Estrutura de referência, com valores ilustrativos:
 
 ```env
 MONGO_URI=mongodb+srv://USUARIO:SENHA@ENDERECO/return_tech?PARAMETROS
-JWT_SECRET_KEY=CHAVE_SECRETA
+JWT_SECRET_KEY=SUBSTITUA_POR_UMA_CHAVE_ALEATORIA_DE_PELO_MENOS_32_CARACTERES
 FRONTEND_URL=http://localhost:5173
 ```
 
@@ -347,9 +364,9 @@ MAIL_SERVER=smtp.gmail.com
 MAIL_PORT=587
 MAIL_USE_TLS=true
 MAIL_USE_SSL=false
-MAIL_USERNAME=seu-email@gmail.com
+MAIL_USERNAME=returntech0@gmail.com
 MAIL_PASSWORD=
-MAIL_FROM=seu-email@gmail.com
+MAIL_FROM=returntech0@gmail.com
 MAIL_FROM_NAME=Return Tech
 CHALLENGE_TIMEZONE=America/Sao_Paulo
 BACKGROUND_JOBS_ENABLED=true
@@ -358,7 +375,7 @@ JOBS_INTERVAL_SECONDS=30
 
 1. Na conta remetente, ative a verificação em duas etapas e gere uma senha de app.
    Consulte a [orientação oficial do Google](https://support.google.com/accounts/answer/185833?hl=pt-BR).
-2. Preencha `MAIL_USERNAME`, `MAIL_FROM` e `MAIL_PASSWORD` apenas no `.env`.
+2. O remetente configurado é `returntech0@gmail.com`. Preencha `MAIL_PASSWORD` apenas no `.env` local.
    Use a senha de app em `MAIL_PASSWORD`, em vez da senha comum da conta.
 3. Mude `MAIL_ENABLED=true` e reinicie o backend. Com envio desativado ou
    configuração incompleta, os avisos ficam na fila para envio depois da ativação.
@@ -414,3 +431,30 @@ e antes da confirmação no banco ainda pode causar uma repetição na recupera�
 
 O `.env` é ignorado pelo Git. Os testes usam banco em memória e SMTP simulado;
 eles não enviam mensagens reais nem usam as credenciais do remetente.
+
+## Avaliação automática de código com Judge0
+
+O Judge0 executa as soluções enviadas pelo editor e permite atribuir pontos com base em casos privados cadastrados pela empresa. As notas automáticas ficam separadas das avaliações humanas e da shortlist. Os fluxos existentes de aprovação, encerramento de desafios e e-mails continuam disponíveis.
+
+Atualize as dependências do backend com `python -m pip install -r requirements.txt` e preserve a configuração existente do `.env` ao acrescentar:
+
+```env
+JUDGE0_URL=http://127.0.0.1:2358
+JUDGE0_API_KEY=
+JUDGE0_RAPIDAPI_HOST=
+JUDGE0_AUTH_TOKEN=
+```
+
+Configure o token de acordo com sua instância do Judge0. Em RapidAPI, utilize também a chave e o host do provedor. Nunca coloque essas credenciais no frontend. Para executores remotos, use HTTPS; HTTP é aceito somente em localhost. Reinicie o backend após mudar a configuração.
+
+Com o Judge0 e o backend ativos, mantenha outro terminal na pasta `Return_Tech_Backend` para concluir as correções mesmo quando o navegador estiver fechado:
+
+```powershell
+python -m flask --app run.py process-code-jobs --watch
+```
+
+Sem `--watch`, o comando processa uma rodada. Essa fila é independente da fila de prazos e e-mails (`worker`).
+
+A empresa configura a avaliação em um rascunho sem tentativas e envia o desafio para aprovação. A administração revisa os casos e o enunciado e aprova a revisão atual. Depois da publicação, talentos inscritos podem enviar código dentro do prazo; a empresa acompanha a melhor pontuação de cada participante.
+
+Consulte [INTEGRACAO_JUDGE0.md](INTEGRACAO_JUDGE0.md) para iniciar a VM local já preparada, consultar as rotas, configurar os casos e executar os testes com serviços simulados.

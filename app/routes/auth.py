@@ -10,7 +10,9 @@ auth_bp = Blueprint("auth", __name__)
 
 @auth_bp.post("/register")
 def register():
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return api_error("Envie os dados do cadastro como um objeto.")
     email = str(data.get("email", "")).strip().lower()
     password = str(data.get("password", ""))
     role = str(data.get("role", ""))
@@ -37,8 +39,9 @@ def register():
     skills = data.get("skills", [])
     if isinstance(skills, str):
         skills = [item.strip() for item in skills.split(",") if item.strip()]
-    elif not isinstance(skills, list):
-        skills = []
+    if not isinstance(skills, list) or any(not isinstance(item, str) for item in skills):
+        return api_error("Informe competências como uma lista de textos.")
+    skills = [item.strip() for item in skills if item.strip()]
 
     user = {
         "email": email,
@@ -63,7 +66,9 @@ def register():
 
 @auth_bp.post("/login")
 def login():
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return api_error("Envie os dados de acesso como um objeto.")
     email = str(data.get("email", "")).strip().lower()
     password = str(data.get("password", ""))
     user = mongo.db.users.find_one({"email": email})

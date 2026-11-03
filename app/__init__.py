@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify
@@ -9,8 +10,9 @@ from .extensions import jwt, mongo
 from .mail_notifications import configure_mail, env_bool
 
 
-def create_app():
-    load_dotenv()
+def create_app(test_config=None):
+    if not (test_config or {}).get("TESTING"):
+        load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
     app = Flask(__name__)
     app.config["MONGO_URI"] = os.getenv(
         "MONGO_URI", "mongodb://localhost:27017/return_tech"
@@ -23,11 +25,16 @@ def create_app():
     app.config["CHALLENGE_TIMEZONE"] = os.getenv("CHALLENGE_TIMEZONE", "America/Sao_Paulo")
     app.config["BACKGROUND_JOBS_ENABLED"] = env_bool("BACKGROUND_JOBS_ENABLED", True)
     app.config["JOBS_INTERVAL_SECONDS"] = max(1, int(os.getenv("JOBS_INTERVAL_SECONDS", "30")))
+    app.config["FRONTEND_URL"] = os.getenv("FRONTEND_URL", "http://localhost:5173")
     configure_mail(app)
+    for key in ("JUDGE0_URL", "JUDGE0_API_KEY", "JUDGE0_RAPIDAPI_HOST", "JUDGE0_AUTH_TOKEN"):
+        app.config[key] = os.getenv(key, "")
+    if test_config:
+        app.config.update(test_config)
 
     CORS(
         app,
-        resources={r"/api/*": {"origins": os.getenv("FRONTEND_URL", "http://localhost:5173")}},
+        resources={r"/api/*": {"origins": app.config["FRONTEND_URL"]}},
         supports_credentials=True,
     )
     mongo.init_app(app)
@@ -61,6 +68,9 @@ def create_app():
         mongo.db.challenges.create_index([("status", ASCENDING), ("ends_at", ASCENDING)])
         mongo.db.email_outbox.create_index([("status", ASCENDING), ("next_attempt_at", ASCENDING)])
         mongo.db.email_outbox.create_index([("status", ASCENDING), ("lease_until", ASCENDING)])
+
+    from .coding_setup import setup_coding
+    setup_coding(app)
 
     return app
 

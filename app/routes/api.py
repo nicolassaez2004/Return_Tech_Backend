@@ -1,18 +1,27 @@
 from datetime import date
+from hashlib import sha256
+from uuid import uuid4
 
 import gridfs
+from gridfs.errors import NoFile
 from bson import ObjectId
 from flask import Blueprint, Response, jsonify, request
 from flask_jwt_extended import jwt_required
 from pymongo import DESCENDING
+from pymongo.errors import PyMongoError
 from werkzeug.utils import secure_filename
 
 from ..extensions import mongo
 from ..challenge_lifecycle import close_if_expired, deadline_end, deadline_passed
 from ..mail_notifications import mail_event
+from ..services.coding import validated_config
 from ..utils import api_error, current_user, now, object_id, serialize
 
 api_bp = Blueprint("api", __name__)
+LEGACY_CHALLENGE_IDS = {
+    "demo-sentinel-fintech", "demo-aurora-cloud", "demo-horizonte-saude",
+    "demo-vertice-logistica", "demo-solaris-energia", "demo-nexo-varejo",
+}
 
 
 def require_role(role):
@@ -44,7 +53,7 @@ def company_name(owner_id):
     return company.get("organization_name") or company.get("name") or "Empresa"
 
 
-@api_bp.route("/profile", methods=["GET", "PUT"])
+@api_bp.route("/profile", methods=["GET", "PATCH", "PUT"])
 @jwt_required()
 def profile():
     user = current_user()
@@ -54,13 +63,17 @@ def profile():
         user.pop("password_hash", None)
         return jsonify({"profile": serialize(user)})
 
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return api_error("Envie os dados do perfil como um objeto.")
     fields = ["name", "headline", "city", "bio"]
     updates = {field: str(data.get(field, user.get(field, ""))).strip() for field in fields}
     skills = data.get("skills", user.get("skills", []))
     if isinstance(skills, str):
         skills = [item.strip() for item in skills.split(",") if item.strip()]
-    updates["skills"] = skills if isinstance(skills, list) else []
+    if not isinstance(skills, list) or any(not isinstance(item, str) for item in skills):
+        return api_error("Informe competências como uma lista de textos.")
+    updates["skills"] = [item.strip() for item in skills if item.strip()]
     if user["role"] == "company":
         updates["organization_name"] = str(
             data.get("organization_name", user.get("organization_name", ""))
@@ -117,6 +130,17 @@ def challenge_details(challenge, user):
         challenge["participation"] = mongo.db.participations.find_one(
             {"challenge_id": challenge["_id"], "talent_id": user["_id"]}
         )
+        if challenge["participation"] and not challenge.get("coding_enabled"):
+            challenge["latest_submission"] = mongo.db.submissions.find_one(
+                {"participation_id": challenge["participation"]["_id"]},
+                {"summary": 1, "report_url": 1, "file_name": 1, "version": 1, "created_at": 1},
+                sort=[("version", -1), ("created_at", -1)],
+            )
+    challenge["coding_editable"] = (
+        user["role"] == "company" and challenge["owner_id"] == user["_id"]
+        and challenge["status"] == "draft"
+        and mongo.db.coding_jobs.find_one({"challenge_id": challenge["_id"]}) is None
+    )
     return challenge
 
 
@@ -127,9 +151,11 @@ def challenge_detail(challenge_id):
     if not user:
         return api_error("Usuário não encontrado.", 404)
     oid = object_id(challenge_id)
-    challenge = mongo.db.challenges.find_one({"_id": oid}) if oid else None
+    query = {"_id": oid} if oid else {"legacy_id": challenge_id} if challenge_id in LEGACY_CHALLENGE_IDS else None
+    challenge = mongo.db.challenges.find_one(query) if query else None
     if not challenge:
         return api_error("Desafio não encontrado.", 404)
+    oid = challenge["_id"]
     can_manage = user["role"] == "admin" or (
         user["role"] == "company" and challenge["owner_id"] == user["_id"]
     )
@@ -162,13 +188,70 @@ def challenge_detail(challenge_id):
             fields.update({"approved_by": user["_id"], "approved_at": now(),
                            "approved_revision": fields["revision"]})
         result = mongo.db.challenges.update_one(
-            {"_id": oid, "status": challenge["status"], "updated_at": challenge.get("updated_at")},
+            {"_id": oid, "status": challenge["status"], "updated_at": challenge.get("updated_at"),
+             "revision": challenge["revision"] if "revision" in challenge else {"$exists": False}},
             {"$set": fields},
         )
         if result.matched_count != 1:
             return api_error("O desafio foi alterado. Atualize a página antes de salvar.", 409)
         challenge.update(fields)
     return jsonify({"challenge": serialize(challenge_details(challenge, user))})
+
+
+@api_bp.post("/legacy-participations/import")
+@jwt_required()
+def import_legacy_participations():
+    user, error = require_role("talent")
+    if error:
+        return error
+    data = request.get_json(silent=True)
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list) or len(items) > len(LEGACY_CHALLENGE_IDS):
+        return api_error("Informe até seis inscrições para sincronizar.")
+    validated = []
+    seen = set()
+    for item in items:
+        if not isinstance(item, dict):
+            return api_error("Inscrição inválida.")
+        legacy_id = item.get("legacy_id")
+        summary = item.get("summary", "")
+        report_url = item.get("report_url", "")
+        if (not isinstance(legacy_id, str) or legacy_id not in LEGACY_CHALLENGE_IDS or legacy_id in seen
+                or not isinstance(summary, str) or not isinstance(report_url, str)):
+            return api_error("Inscrição inválida.")
+        challenge = mongo.db.challenges.find_one({"legacy_id": legacy_id})
+        if not challenge:
+            return api_error("O desafio ainda não está disponível para sincronização.", 409)
+        seen.add(legacy_id)
+        validated.append((challenge, legacy_id, summary.strip(), report_url.strip()))
+
+    imported_participations = 0
+    imported_submissions = 0
+    for challenge, legacy_id, summary, report_url in validated:
+        timestamp = now()
+        participation_query = {"challenge_id": challenge["_id"], "talent_id": user["_id"]}
+        result = mongo.db.participations.update_one(participation_query, {"$setOnInsert": {
+            **participation_query, "status": "submitted" if summary else "joined",
+            "created_at": timestamp, "updated_at": timestamp,
+        }}, upsert=True)
+        imported_participations += result.upserted_id is not None
+        participation = mongo.db.participations.find_one(participation_query)
+        if not summary:
+            continue
+        digest = sha256(f"legacy-import\0{user['_id']}\0{legacy_id}".encode("utf-8")).hexdigest()[:24]
+        submission_id = ObjectId(digest)
+        version = mongo.db.submissions.count_documents({"participation_id": participation["_id"]}) + 1
+        result = mongo.db.submissions.update_one({"_id": submission_id}, {"$setOnInsert": {
+            "participation_id": participation["_id"], "version": version,
+            "summary": summary, "report_url": report_url, "file_id": None, "file_name": "",
+            "created_at": timestamp, "legacy_id": legacy_id,
+        }}, upsert=True)
+        if result.upserted_id is not None:
+            imported_submissions += 1
+            mongo.db.participations.update_one({"_id": participation["_id"], "status": {"$nin": ["shortlisted", "approved"]}},
+                                              {"$set": {"status": "submitted", "updated_at": timestamp}})
+    return jsonify({"ok": True, "imported_participations": imported_participations,
+                    "imported_submissions": imported_submissions})
 
 
 @api_bp.get("/admin/challenges")
@@ -204,9 +287,16 @@ def challenges():
 
     if user["role"] != "company":
         return api_error("Apenas empresas podem publicar.", 403)
-    fields, error = challenge_fields(request.get_json(silent=True))
+    data = request.get_json(silent=True)
+    fields, error = challenge_fields(data)
     if error:
         return error
+    coding_config = None
+    if "coding_config" in data:
+        try:
+            coding_config = validated_config(data["coding_config"])
+        except ValueError as exc:
+            return api_error(str(exc))
     document = {
         **fields,
         "owner_id": user["_id"],
@@ -219,10 +309,23 @@ def challenges():
         "created_at": now(),
         "updated_at": now(),
     }
-    result = mongo.db.challenges.insert_one(document)
+    if coding_config is not None:
+        document.update({
+            "_id": ObjectId(), "coding_enabled": True,
+            "coding_max_points": coding_config["max_points"], "coding_config_version": uuid4().hex,
+        })
+    try:
+        if coding_config is not None:
+            mongo.db.coding_config_versions.insert_one({
+                "_id": document["coding_config_version"], "challenge_id": document["_id"],
+                **coding_config, "created_at": document["created_at"],
+            })
+        result = mongo.db.challenges.insert_one(document)
+    except PyMongoError:
+        return api_error("Não foi possível confirmar o cadastro do desafio. Confira seus rascunhos antes de tentar novamente.", 503)
     document["_id"] = result.inserted_id
     document["company_name"] = user.get("organization_name") or user["name"]
-    return jsonify({"challenge": serialize(document)}), 201
+    return jsonify({"challenge": serialize(document)}), 201, {"Location": f'/api/challenges/{document["_id"]}'}
 
 
 @api_bp.patch("/challenges/<challenge_id>/status")
@@ -295,7 +398,8 @@ def challenge_status(challenge_id):
     if event_kind:
         mutation["$push"] = {"mail_events": mail_event(event_kind, challenge)}
     result = mongo.db.challenges.update_one(
-        {"_id": oid, "status": current_status, "updated_at": challenge.get("updated_at")},
+        {"_id": oid, "status": current_status, "updated_at": challenge.get("updated_at"),
+         "revision": challenge["revision"] if "revision" in challenge else {"$exists": False}},
         mutation,
     )
     if result.matched_count != 1:
@@ -365,6 +469,15 @@ def submit_work(challenge_id):
     file = request.files.get("file")
     file_id = None
     file_name = ""
+    previous_id = request.form.get("previous_submission_id")
+    if previous_id:
+        previous = mongo.db.submissions.find_one({
+            "_id": object_id(previous_id), "participation_id": participation["_id"],
+        })
+        if not previous:
+            return api_error("A entrega anterior não foi encontrada.", 404)
+        file_id = previous.get("file_id")
+        file_name = previous.get("file_name", "")
     if file and file.filename:
         allowed = {"application/pdf", "text/plain", "application/zip", "application/x-zip-compressed"}
         if file.mimetype not in allowed:
@@ -412,15 +525,64 @@ def submission_file(submission_id):
     if not user or not submission or not submission.get("file_id"):
         return api_error("Arquivo não encontrado.", 404)
     participation = mongo.db.participations.find_one({"_id": submission["participation_id"]})
+    if not participation:
+        return api_error("Arquivo não encontrado.", 404)
     challenge = mongo.db.challenges.find_one({"_id": participation["challenge_id"]})
+    if not challenge:
+        return api_error("Arquivo não encontrado.", 404)
     if user["_id"] not in {participation["talent_id"], challenge["owner_id"]}:
         return api_error("Acesso negado.", 403)
-    stored = gridfs.GridFS(mongo.db).get(submission["file_id"])
+    try:
+        stored = gridfs.GridFS(mongo.db).get(submission["file_id"])
+    except NoFile:
+        return api_error("Arquivo não encontrado.", 404)
     return Response(
         stored.read(),
         mimetype=stored.content_type or "application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{stored.filename}"'},
     )
+
+
+def talent_profile(talent_id):
+    return mongo.db.users.find_one({"_id": talent_id}, {
+        "name": 1, "email": 1, "headline": 1, "city": 1,
+        "bio": 1, "skills": 1, "talent_type": 1,
+    })
+
+
+def save_shortlist(company_id, participation):
+    timestamp = now()
+    mongo.db.company_shortlist.update_one(
+        {"_id": f'{company_id}_{participation["talent_id"]}'},
+        {"$setOnInsert": {"company_id": company_id, "talent_id": participation["talent_id"], "created_at": timestamp},
+         "$set": {"updated_at": timestamp},
+         "$addToSet": {"participation_ids": participation["_id"]}},
+        upsert=True,
+    )
+
+
+@api_bp.post("/participations/<participation_id>/shortlist")
+@jwt_required()
+def shortlist_participant(participation_id):
+    user, error = require_role("company")
+    if error:
+        return error
+    participation = mongo.db.participations.find_one({"_id": object_id(participation_id)})
+    if not participation:
+        return api_error("Participação não encontrada.", 404)
+    challenge = mongo.db.challenges.find_one({"_id": participation["challenge_id"], "owner_id": user["_id"]})
+    if not challenge:
+        return api_error("Participação não pertence à empresa.", 403)
+    has_report = mongo.db.submissions.find_one({"participation_id": participation["_id"]}, {"_id": 1})
+    has_code = mongo.db.coding_jobs.find_one({
+        "challenge_id": challenge["_id"], "talent_id": participation["talent_id"], "mode": "submit",
+    }, {"_id": 1})
+    if not has_report and not has_code:
+        return api_error("Este participante ainda não enviou uma resolução.", 409)
+    save_shortlist(user["_id"], participation)
+    mongo.db.participations.update_one({"_id": participation["_id"]},
+                                      {"$set": {"status": "shortlisted", "updated_at": now()}})
+    return jsonify({"ok": True})
 
 
 @api_bp.post("/submissions/<submission_id>/evaluate")
@@ -433,24 +595,32 @@ def evaluate_submission(submission_id):
     if not submission:
         return api_error("Entrega não encontrada.", 404)
     participation = mongo.db.participations.find_one({"_id": submission["participation_id"]})
+    if not participation:
+        return api_error("Participação não encontrada.", 404)
     challenge = mongo.db.challenges.find_one(
         {"_id": participation["challenge_id"], "owner_id": user["_id"]}
     )
     if not challenge:
         return api_error("Entrega não pertence à empresa.", 403)
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return api_error("Envie os dados da avaliação como um objeto.")
     decision = str(data.get("decision", ""))
     if decision not in {"shortlisted", "rejected"}:
         return api_error("Decisão inválida.")
     feedback = str(data.get("feedback", "")).strip()
     if not feedback:
         return api_error("Informe o feedback.")
+    score = data.get("score")
+    if (isinstance(score, bool) or not isinstance(score, (int, float))
+            or not 0 <= score <= 100 or not float(score).is_integer()):
+        return api_error("Informe uma nota inteira de 0 a 100.")
     shortlisted = decision == "shortlisted"
     evaluation = {
         "submission_id": submission["_id"],
         "evaluator_id": user["_id"],
         "decision": decision,
-        "score": max(0, min(100, int(data.get("score") or 0))),
+        "score": int(score),
         "feedback": feedback,
         "recognized": shortlisted,
         "shortlisted": shortlisted,
@@ -458,6 +628,8 @@ def evaluate_submission(submission_id):
         "created_at": now(),
     }
     mongo.db.evaluations.insert_one(evaluation)
+    if shortlisted:
+        save_shortlist(user["_id"], participation)
     status = decision
     mongo.db.participations.update_one(
         {"_id": participation["_id"]},
@@ -502,13 +674,33 @@ def dashboard():
                     {"submission_id": submission["_id"]}, sort=[("created_at", -1)]
                 )
                 submissions.append(submission)
-        payload = {"challenges": challenges, "submissions": submissions}
+        coding_submissions = []
+        portfolio_challenges = {item["_id"]: item for item in challenges}
+        participation_by_challenge = {item["challenge_id"]: item for item in participations}
+        for job in mongo.db.coding_jobs.find({"talent_id": user["_id"], "mode": "submit"}).sort("created_at", -1):
+            code_challenge = portfolio_challenges.get(job["challenge_id"])
+            if code_challenge is None:
+                stored = mongo.db.challenges.find_one({"_id": job["challenge_id"]}, {"_id": 1, "status": 1})
+                code_challenge = {"_id": job["challenge_id"], "title": "Desafio em revisão" if stored else "Desafio indisponível", "skills": []}
+                portfolio_challenges[job["challenge_id"]] = code_challenge
+            item = {key: job[key] for key in ("_id", "challenge_id", "mode", "language", "status", "created_at", "finished_at", "passed", "total", "score", "max_points", "error") if key in job}
+            item.update({
+                "kind": "code", "source_code": job.get("source_code", ""),
+                "challenge": {key: code_challenge[key] for key in ("_id", "title", "skills", "status", "coding_enabled") if key in code_challenge},
+                "participation": participation_by_challenge.get(job["challenge_id"]),
+            })
+            coding_submissions.append(item)
+        payload = {"challenges": challenges, "submissions": submissions, "coding_submissions": coding_submissions}
     elif user["role"] == "company":
         challenges = list(
             mongo.db.challenges.find({"owner_id": user["_id"]}).sort("created_at", -1)
         )
         submissions = []
+        coding_submissions = []
+        shortlisted_talents = {row["talent_id"] for row in mongo.db.company_shortlist.find({"company_id": user["_id"]})}
         for challenge in challenges:
+            challenge["coding_editable"] = (challenge["status"] == "draft" and
+                                            mongo.db.coding_jobs.find_one({"challenge_id": challenge["_id"]}) is None)
             parts = list(mongo.db.participations.find({"challenge_id": challenge["_id"]}))
             challenge["participant_count"] = len(parts)
             challenge["pending_count"] = sum(p["status"] == "submitted" for p in parts)
@@ -516,9 +708,7 @@ def dashboard():
                 p["status"] in {"approved", "shortlisted"} for p in parts
             )
             for participation in parts:
-                talent = mongo.db.users.find_one({"_id": participation["talent_id"]})
-                if talent:
-                    talent.pop("password_hash", None)
+                talent = talent_profile(participation["talent_id"])
                 for submission in mongo.db.submissions.find(
                     {"participation_id": participation["_id"]}
                 ).sort("created_at", -1):
@@ -528,8 +718,34 @@ def dashboard():
                     submission["evaluation"] = mongo.db.evaluations.find_one(
                         {"submission_id": submission["_id"]}, sort=[("created_at", -1)]
                     )
+                    if submission["evaluation"] and submission["evaluation"].get("decision") == "shortlisted":
+                        shortlisted_talents.add(participation["talent_id"])
                     submissions.append(submission)
-        payload = {"challenges": challenges, "submissions": submissions}
+                for job in mongo.db.coding_jobs.find({
+                    "challenge_id": challenge["_id"], "talent_id": participation["talent_id"], "mode": "submit",
+                }).sort("created_at", -1):
+                    item = {key: job[key] for key in (
+                        "_id", "language", "source_code", "status", "score", "max_points", "passed", "total", "created_at", "error",
+                    ) if key in job}
+                    item.update({"kind": "code", "challenge": challenge, "participation": participation, "talent": talent})
+                    coding_submissions.append(item)
+        shortlist = {}
+        for item in submissions + coding_submissions:
+            talent = item.get("talent")
+            item["shortlisted"] = bool(talent and talent["_id"] in shortlisted_talents)
+            if item["shortlisted"]:
+                entry = shortlist.setdefault(talent["_id"], {"talent": talent, "challenges": {}})
+                challenge = item["challenge"]
+                entry["challenges"][challenge["_id"]] = {"_id": challenge["_id"], "title": challenge["title"]}
+        for talent_id in shortlisted_talents - shortlist.keys():
+            talent = talent_profile(talent_id)
+            if talent:
+                shortlist[talent_id] = {"talent": talent, "challenges": {}}
+        shortlist_profiles = [{"talent": entry["talent"], "challenges": list(entry["challenges"].values())}
+                              for entry in shortlist.values()]
+        shortlist_profiles.sort(key=lambda entry: entry["talent"].get("name", "").casefold())
+        payload = {"challenges": challenges, "submissions": submissions,
+                   "coding_submissions": coding_submissions, "shortlist": shortlist_profiles}
     else:
         return api_error("Use o painel de administração.", 403)
     notifications = list(
